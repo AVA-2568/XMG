@@ -1,5 +1,5 @@
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/AVA-2568/xmg/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/AVA-2568/xmg/main/install.sh)
 ```
 ```
 xmg/
