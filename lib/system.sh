@@ -53,9 +53,9 @@ update_cache() {
 
 refresh_cache() {
     {
-        echo "caddy=$(systemctl is-active caddy 2>/dev/null || echo unknown)"
-        echo "xray=$(systemctl is-active xray 2>/dev/null || echo unknown)"
-        echo "tcp=$(ss -ant 2>/dev/null | wc -l)"
+        pidof caddy >/dev/null && echo "caddy=active" || echo "caddy=inactive"
+        pidof xray >/dev/null && echo "xray=active" || echo "xray=inactive"
+        echo "tcp=$(cat /proc/net/tcp | wc -l)"
     } > "$CACHE_FILE"
 }
 
