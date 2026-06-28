@@ -1,27 +1,23 @@
 #!/usr/bin/env bash
 #
-# xmg.sh - 轻量级 VPS 脚本管理器主入口
+# xmg 主入口
 #
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -euo pipefail
 
-XMG_VERSION="0.1.0"
-
-# 解析真实路径，兼容 /usr/local/bin/xmg 软链接
+# 解析路径
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "${SOURCE}" ]]; do
-    DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+    DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
     SOURCE="$(readlink "${SOURCE}")"
     [[ "${SOURCE}" != /* ]] && SOURCE="${DIR}/${SOURCE}"
 done
 
-BASE_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
+BASE_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
 
-export XMG_VERSION
 export BASE_DIR
 
+# 加载模块
 source "${BASE_DIR}/lib/common.sh"
 source "${BASE_DIR}/lib/system.sh"
 source "${BASE_DIR}/lib/caddy.sh"
@@ -29,12 +25,14 @@ source "${BASE_DIR}/lib/xray.sh"
 source "${BASE_DIR}/lib/site.sh"
 source "${BASE_DIR}/lib/firewall.sh"
 source "${BASE_DIR}/lib/menu.sh"
+source "${BASE_DIR}/lib/monitor.sh"   ✅ 新增
 
 main() {
     need_root
     detect_os
     init_dirs
-    main_menu
+
+    monitor_loop   ✅ 直接进入监控
 }
 
 main "$@"
