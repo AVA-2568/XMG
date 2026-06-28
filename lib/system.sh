@@ -1,209 +1,78 @@
 #!/usr/bin/env bash
 #
-# system.sh - 系统信息 + 低资源监控面板
+# system.sh - 非实时系统管理模块（轻量版）
 #
 
 ########################################
-# 基础系统信息
+# 基础系统信息（菜单用）
 ########################################
 
 show_system_info() {
     echo
     echo "========== 系统信息 =========="
-    echo "主机名: $(hostname)"
-    echo "系统: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')"
-    echo "内核: $(uname -r)"
-    echo
 
+    echo "主机名: $(hostname)"
+
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        echo "系统: ${PRETTY_NAME}"
+    fi
+
+    echo "内核: $(uname -r)"
+
+    echo
+    echo "========== CPU =========="
+    echo "逻辑 CPU 核心数: $(nproc)"
+
+    echo
     echo "========== 内存 =========="
     free -h
-    echo
 
+    echo
     echo "========== 磁盘 =========="
     df -h /
-    echo
-
-    echo "========== 端口监听 =========="
-    ss -lntup || true
-}
-
-########################################
-# 缓存（避免频繁 systemctl / ss）
-########################################
-
-CACHE_FILE="/tmp/xmg_cache"
-CACHE_TTL=2  # 秒（建议 2~5）
-
-update_cache() {
-    local now ts
-
-    now=$(date +%s)
-
-    if [[ ! -f "$CACHE_FILE" ]]; then
-        refresh_cache
-        return
-    fi
-
-    ts=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
-
-    if (( now - ts >= CACHE_TTL )); then
-        refresh_cache
-    fi
-}
-
-refresh_cache() {
-    {
-        pidof caddy >/dev/null && echo "caddy=active" || echo "caddy=inactive"
-        pidof xray >/dev/null && echo "xray=active" || echo "xray=inactive"
-        echo "tcp=$(cat /proc/net/tcp | wc -l)"
-    } > "$CACHE_FILE"
-}
-
-get_cache() {
-    grep "^$1=" "$CACHE_FILE" 2>/dev/null | cut -d= -f2
-}
-
-########################################
-# CPU（低开销实现）
-########################################
-
-get_cpu_usage() {
-    local user nice system idle iowait irq softirq steal
-    local total_before total_after idle_before idle_after
-    local total_diff idle_diff cpu
-
-    read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
-    total_before=$((user+nice+system+idle+iowait+irq+softirq+steal))
-    idle_before=$((idle+iowait))
-
-    sleep 0.2
-
-    read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
-    total_after=$((user+nice+system+idle+iowait+irq+softirq+steal))
-    idle_after=$((idle+iowait))
-
-    total_diff=$((total_after-total_before))
-    idle_diff=$((idle_after-idle_before))
-
-    if (( total_diff == 0 )); then
-        echo "0%"
-        return
-    fi
-
-    cpu=$((100*(total_diff-idle_diff)/total_diff))
-    echo "${cpu}%"
-}
-
-########################################
-# 内存（无 ps）
-########################################
-
-get_mem_usage() {
-    local total avail used
-
-    total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    avail=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-
-    used=$((total - avail))
-
-    echo "$((used/1024))MB / $((total/1024))MB"
-}
-
-########################################
-# TCP 数量
-########################################
-
-get_tcp_count() {
-    get_cache tcp
-}
-
-########################################
-# load average
-########################################
-
-get_load() {
-    awk '{print $1" "$2" "$3}' /proc/loadavg
-}
-
-########################################
-# 状态灯
-########################################
-
-get_status_light() {
-    case "$1" in
-        active)
-            echo -e "\033[32m●\033[0m"
-            ;;
-        inactive)
-            echo -e "\033[31m●\033[0m"
-            ;;
-        failed)
-            echo -e "\033[31m●\033[0m"
-            ;;
-        *)
-            echo -e "\033[33m●\033[0m"
-            ;;
-    esac
-}
-
-########################################
-# top风格面板（核心）
-########################################
-
-show_dashboard() {
-    update_cache
-
-    local caddy_status xray_status
-    local cpu mem tcp load
-
-    caddy_status=$(get_cache caddy)
-    xray_status=$(get_cache xray)
-
-    cpu=$(get_cpu_usage)
-    mem=$(get_mem_usage)
-    tcp=$(get_tcp_count)
-    load=$(get_load)
-
-    clear
-
-    echo "=========================================="
-    echo " XMG Monitor (Light Mode)"
-    echo "------------------------------------------"
-
-    printf " Caddy: %s %-8s   Xray: %s %-8s\n" \
-        "$(get_status_light $caddy_status)" "$caddy_status" \
-        "$(get_status_light $xray_status)" "$xray_status"
 
     echo
-
-    printf " CPU: %-10s  MEM: %-18s\n" "$cpu" "$mem"
-    printf " TCP: %-10s  Load: %s\n" "$tcp" "$load"
-
-    echo "=========================================="
-    echo
+    echo "========== 网络端口 =========="
+    ss -lntup 2>/dev/null || echo "ss 命令不可用"
 }
 
 ########################################
-# 综合状态（旧功能保留）
+# 服务状态（菜单用）
 ########################################
 
 show_services_status() {
+    echo
     echo "========== 服务状态 =========="
-    systemctl is-active caddy 2>/dev/null || echo "caddy: not installed"
-    systemctl is-active xray 2>/dev/null || echo "xray: not installed"
+
+    if pidof caddy >/dev/null 2>&1; then
+        echo "Caddy: running"
+    else
+        echo "Caddy: stopped"
+    fi
+
+    if pidof xray >/dev/null 2>&1; then
+        echo "Xray: running"
+    else
+        echo "Xray: stopped"
+    fi
 
     echo
-    echo "==========端口=========="
-    ss -lntup || true
+    echo "========== 端口监听 =========="
+    ss -lntup 2>/dev/null || echo "ss 不可用"
 }
 
 ########################################
-# 小内存优化（保留）
+# 小内存 VPS 优化
 ########################################
 
 optimize_small_vps() {
-    echo "[INFO] 优化小内存 VPS..."
+    echo
+    echo "[INFO] 开始优化小内存 VPS（适用于 0.5C / 512MB）"
 
+    ########################################
+    # journald 限制
+    ########################################
     mkdir -p /etc/systemd/journald.conf.d
 
     cat > /etc/systemd/journald.conf.d/99-xmg.conf <<EOF
@@ -213,20 +82,64 @@ RuntimeMaxUse=20M
 MaxRetentionSec=7day
 EOF
 
-    systemctl restart systemd-journald || true
+    systemctl restart systemd-journald 2>/dev/null || true
 
-    if ! swapon --show | grep -q '^'; then
+    ########################################
+    # Swap
+    ########################################
+    if swapon --show | grep -q '^'; then
+        echo "[INFO] 已存在 swap，跳过创建"
+    else
         echo "[INFO] 创建 512M swap..."
-        fallocate -l 512M /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=512
+
+        if ! fallocate -l 512M /swapfile 2>/dev/null; then
+            dd if=/dev/zero of=/swapfile bs=1M count=512
+        fi
+
         chmod 600 /swapfile
         mkswap /swapfile
         swapon /swapfile
 
-        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        if ! grep -q '^/swapfile ' /etc/fstab; then
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        fi
     fi
 
-    echo "vm.swappiness=20" >> /etc/sysctl.conf
-    sysctl -p || true
+    ########################################
+    # sysctl 优化
+    ########################################
+    cat > /etc/sysctl.d/99-xmg.conf <<EOF
+vm.swappiness=20
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
 
-    echo "[OK] 优化完成"
+    sysctl --system >/dev/null 2>&1 || true
+
+    echo "[OK] 优化完成 ✅"
+}
+
+########################################
+# （可选）快速诊断
+########################################
+
+quick_diagnose() {
+    echo
+    echo "========== 快速诊断 =========="
+
+    echo "[服务状态]"
+    pidof caddy >/dev/null && echo "Caddy: OK" || echo "Caddy: ERROR"
+    pidof xray  >/dev/null && echo "Xray: OK"  || echo "Xray: ERROR"
+
+    echo
+    echo "[端口]"
+    ss -lnt 2>/dev/null | head -n 10 || true
+
+    echo
+    echo "[内存]"
+    free -h
+
+    echo
+    echo "[负载]"
+    cat /proc/loadavg
 }
