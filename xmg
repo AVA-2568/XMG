@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+XMG_VERSION="1.4.0"
+XMG_LIB_DIR="${XMG_LIB_DIR:-/usr/local/lib/xmg}"
+
+if [ ! -d "$XMG_LIB_DIR" ]; then
+    echo "错误: XMG lib directory not found: $XMG_LIB_DIR" >&2
+    echo "源码目录运行示例: XMG_LIB_DIR=./lib ./xmg" >&2
+    exit 1
+fi
+
+# 默认启动路径只加载低资源监控必需模块
+# shellcheck source=/usr/local/lib/xmg/common.sh
+source "$XMG_LIB_DIR/common.sh"
+
+# shellcheck source=/usr/local/lib/xmg/system.sh
+source "$XMG_LIB_DIR/system.sh"
+
+# shellcheck source=/usr/local/lib/xmg/menu.sh
+source "$XMG_LIB_DIR/menu.sh"
+
+# shellcheck source=/usr/local/lib/xmg/monitor.sh
+source "$XMG_LIB_DIR/monitor.sh"
+
+xmg_usage() {
+    cat <<EOF
+XMG $XMG_VERSION
+
+用法:
+  xmg                 启动 XMG Monitor (Real-Time)
+  xmg monitor         启动 XMG Monitor (Real-Time)
+  xmg menu            进入管理菜单
+  xmg doctor          输出轻量系统摘要
+  xmg version         显示版本
+  xmg help            显示帮助
+
+环境变量:
+  XMG_LIB_DIR         库目录，默认 /usr/local/lib/xmg
+  XMG_CACHE_TTL       基础系统状态缓存秒数，默认 3
+  XMG_SERVICE_TTL     服务状态缓存秒数，默认 5
+  XMG_MONITOR_INTERVAL UI 刷新间隔，默认 1
+  XMG_COLOR           auto/always/never，默认 auto
+
+按键:
+  m                   进入管理菜单
+  q                   退出
+EOF
+}
+
+xmg_main() {
+    xmg_require_bash
+
+    case "${1:-monitor}" in
+        monitor)
+            xmg_monitor_loop
+            ;;
+        menu)
+            xmg_menu_loop
+            ;;
+        doctor)
+            xmg_system_refresh_all force
+            xmg_system_print_summary
+            ;;
+        version|-v|--version)
+            echo "XMG $XMG_VERSION"
+            ;;
+        help|-h|--help)
+            xmg_usage
+            ;;
+        *)
+            xmg_error "未知参数: $1"
+            echo
+            xmg_usage
+            exit 2
+            ;;
+    esac
+}
+
+xmg_main "$@"
