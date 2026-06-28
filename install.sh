@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-XMG_BASE_URL="${XMG_BASE_URL:-https://raw.githubusercontent.com/AVA-2568/XMG/main}"
+# GitHub Raw 基准地址。
+# 你当前确定使用：
+# https://raw.githubusercontent.com/AVA-2568/xmg/main/lib/xray.sh
+# https://raw.githubusercontent.com/AVA-2568/xmg/main/lib/caddy.sh
+# https://raw.githubusercontent.com/AVA-2568/xmg/main/lib/site.sh
+#
+# 因此这里统一使用 /main/ 风格。
+XMG_BASE_URL="${XMG_BASE_URL:-https://raw.githubusercontent.com/AVA-2568/xmg/main}"
+
 XMG_BIN="${XMG_BIN:-/usr/local/bin/xmg}"
 XMG_LIB_DIR="${XMG_LIB_DIR:-/usr/local/lib/xmg}"
 
@@ -47,13 +55,24 @@ uninstall.sh
 EOF
 }
 
+install_dirs() {
+    mkdir -p \
+        "$(dirname "$XMG_BIN")" \
+        "$XMG_LIB_DIR" \
+        /etc/xmg \
+        /run/xmg \
+        /var/log/xmg \
+        /var/backups/xmg \
+        /var/www/xmg/site
+}
+
 install_local() {
     local f=""
 
     [ -f "$SCRIPT_DIR/xmg" ] || return 1
     [ -d "$SCRIPT_DIR/lib" ] || return 1
 
-    mkdir -p "$(dirname "$XMG_BIN")" "$XMG_LIB_DIR"
+    install_dirs
 
     install -m 0755 -o root -g root "$SCRIPT_DIR/xmg" "$XMG_BIN"
 
@@ -74,10 +93,18 @@ download_file() {
     cmd_exists curl || die "curl 不存在，请先安装 curl"
 
     tmp="$(mktemp)"
+    if [ -z "$tmp" ]; then
+        die "创建临时文件失败"
+    fi
 
     if ! curl -fsSL "$url" -o "$tmp"; then
         rm -f "$tmp"
         die "下载失败: $url"
+    fi
+
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        die "下载结果为空: $url"
     fi
 
     install -m "$mode" -o root -g root "$tmp" "$dst"
@@ -87,7 +114,9 @@ download_file() {
 install_remote() {
     local f=""
 
-    mkdir -p "$(dirname "$XMG_BIN")" "$XMG_LIB_DIR"
+    install_dirs
+
+    echo "远程源: $XMG_BASE_URL"
 
     download_file "$XMG_BASE_URL/xmg" "$XMG_BIN" 0755
 
@@ -96,23 +125,45 @@ install_remote() {
     done < <(required_libs)
 }
 
+verify_install() {
+    local missing=0
+    local f=""
+
+    if [ ! -x "$XMG_BIN" ]; then
+        red "[MISS] $XMG_BIN"
+        missing=$((missing + 1))
+    else
+        green "[OK]   $XMG_BIN"
+    fi
+
+    while IFS= read -r f; do
+        if [ ! -r "$XMG_LIB_DIR/$f" ]; then
+            red "[MISS] $XMG_LIB_DIR/$f"
+            missing=$((missing + 1))
+        else
+            green "[OK]   $XMG_LIB_DIR/$f"
+        fi
+    done < <(required_libs)
+
+    if [ "$missing" -ne 0 ]; then
+        die "安装校验失败，缺失 $missing 个文件"
+    fi
+}
+
 main() {
     need_root
-
-    mkdir -p \
-        /etc/xmg \
-        /run/xmg \
-        /var/log/xmg \
-        /var/backups/xmg \
-        /var/www/xmg/site
 
     if install_local; then
         green "已从本地源码安装 XMG"
     else
-        yellow "未检测到完整本地源码，尝试从 GitHub raw 安装"
+        yellow "未检测到完整本地源码，尝试从 GitHub Raw 安装"
         install_remote
-        green "已从 GitHub raw 安装 XMG"
+        green "已从 GitHub Raw 安装 XMG"
     fi
+
+    echo
+    echo "安装文件校验："
+    verify_install
 
     echo
     green "安装完成"
