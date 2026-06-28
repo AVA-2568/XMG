@@ -13,6 +13,7 @@ run_main_menu() {
         echo "5. 防火墙"
         echo "6. 综合状态"
         echo "7. VPS优化"
+        echo "8. 更新 XMG"
         echo "0. 返回监控"
         echo
 
@@ -26,6 +27,7 @@ run_main_menu() {
             5) firewall_menu ;;
             6) show_services_status; pause ;;
             7) optimize_small_vps; pause ;;
+            8) xmg_update; read -rp "按 Enter
             0) break ;;
             *) warn "无效选择"; pause ;;
         esac
