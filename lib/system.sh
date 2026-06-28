@@ -23,6 +23,48 @@ show_system_info() {
     ss -lntup || true
 }
 
+show_panel_header() {
+    local caddy_status
+    local xray_status
+
+    caddy_status="$(get_service_status caddy)"
+    xray_status="$(get_service_status xray)"
+
+    echo "===================================="
+    echo "  XMG 轻量级 VPS 管理器"
+    echo "  Version: ${XMG_VERSION}"
+    echo "------------------------------------"
+    printf "  Caddy: %-12s | Xray: %-12s\n" "${caddy_status}" "${xray_status}"
+    echo "===================================="
+}
+
+get_service_status() {
+    local svc="$1"
+
+    if ! service_exists "${svc}"; then
+        echo "not installed"
+        return
+    fi
+
+    local status
+    status=$(systemctl is-active "${svc}" 2>/dev/null || true)
+
+    case "${status}" in
+        active)
+            echo -e "\033[32mrunning\033[0m"
+            ;;
+        inactive)
+            echo -e "\033[31mstopped\033[0m"
+            ;;
+        failed)
+            echo -e "\033[31mfailed\033[0m"
+            ;;
+        *)
+            echo -e "\033[33munknown\033[0m"
+            ;;
+    esac
+}
+
 show_services_status() {
     echo
     echo "========== 服务状态 =========="
