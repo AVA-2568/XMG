@@ -19,6 +19,7 @@ xmg/
     ├── site.sh
     └── firewall.sh
 ```
+
 ```
 /opt/xmg/                  程序目录
 /usr/local/bin/xmg         命令入口
@@ -28,16 +29,16 @@ xmg/
 /etc/caddy/Caddyfile       Caddy 配置
 /usr/local/etc/xray/config.json  Xray 配置
 ```
+
 ```
 xmg #运行
-
 #更新
 cd /opt/xmg
 git pull --ff-only
-
 #卸载
 bash /opt/xmg/uninstall.sh
 ```
+
 ---
 
 ## ⚠️ 免责声明
