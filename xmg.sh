@@ -26,6 +26,7 @@ source "${BASE_DIR}/lib/site.sh"
 source "${BASE_DIR}/lib/firewall.sh"
 source "${BASE_DIR}/lib/menu.sh"
 source "${BASE_DIR}/lib/monitor.sh"   ✅ 新增
+source "${BASE_DIR}/lib/update.sh"
 
 main() {
     need_root
