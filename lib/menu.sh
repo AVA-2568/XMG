@@ -6,6 +6,7 @@
 main_menu() {
     while true; do
         show_panel_header
+        
         echo "1. 系统信息"
         echo "2. Caddy 管理"
         echo "3. Xray 管理"
