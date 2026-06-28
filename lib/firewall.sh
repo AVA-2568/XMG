@@ -1,78 +1,79 @@
 #!/usr/bin/env bash
-#
-# firewall.sh - 简单防火墙管理
-#
 
-install_ufw_if_needed() {
-    if ! command -v ufw >/dev/null 2>&1; then
-        apt-get update
-        apt-get install -y ufw
+[ "${XMG_FIREWALL_SH_LOADED:-0}" = "1" ] && return 0
+XMG_FIREWALL_SH_LOADED=1
+
+xmg_firewall_need_ufw() {
+    if ! xmg_cmd_exists ufw; then
+        xmg_die "ufw 不存在，请先安装 ufw，或使用云安全组/iptables/nftables 手动管理防火墙"
     fi
 }
 
-open_common_ports() {
-    install_ufw_if_needed
-
-    ufw allow 22/tcp || true
-    ufw allow 80/tcp || true
-    ufw allow 443/tcp || true
-
-    ok "已放行 22/80/443 TCP"
+xmg_firewall_status() {
+    xmg_firewall_need_ufw
+    ufw status verbose || true
 }
 
-open_custom_port() {
-    local port
+xmg_firewall_allow_basic() {
+    xmg_require_root
+    xmg_firewall_need_ufw
 
-    read -rp "请输入要开放的 TCP 端口: " port
+    ufw allow 22/tcp comment 'XMG SSH'
+    ufw allow 80/tcp comment 'XMG HTTP'
+    ufw allow 443/tcp comment 'XMG HTTPS'
 
-    if ! [[ "${port}" =~ ^[0-9]+$ ]]; then
-        err "端口必须是数字"
-        return 1
-    fi
-
-    if (( port < 1 || port > 65535 )); then
-        err "端口范围必须是 1-65535"
-        return 1
-    fi
-
-    install_ufw_if_needed
-    ufw allow "${port}/tcp"
-
-    ok "已放行 TCP 端口：${port}"
+    xmg_info "已放行 22/tcp、80/tcp、443/tcp"
+    xmg_warn "如果 SSH 不是 22 端口，请自行放行真实 SSH 端口"
 }
 
-show_firewall_status() {
-    if command -v ufw >/dev/null 2>&1; then
-        ufw status numbered
+xmg_firewall_enable() {
+    xmg_require_root
+    xmg_firewall_need_ufw
+
+    xmg_warn "启用 UFW 可能导致远程 SSH 断开，请确认端口已放行"
+
+    if xmg_confirm "确认启用 UFW?"; then
+        ufw --force enable
+        ufw status verbose || true
     else
-        warn "ufw 未安装"
+        xmg_info "已取消"
     fi
 }
 
-enable_ufw() {
-    install_ufw_if_needed
-    ufw enable
+xmg_firewall_disable() {
+    xmg_require_root
+    xmg_firewall_need_ufw
+
+    if xmg_confirm "确认禁用 UFW?"; then
+        ufw disable
+    else
+        xmg_info "已取消"
+    fi
 }
 
-firewall_menu() {
+xmg_firewall_menu() {
+    local choice=""
+
     while true; do
         clear
         echo "========== 防火墙管理 =========="
-        echo "1. 放行 22/80/443"
-        echo "2. 放行自定义 TCP 端口"
-        echo "3. 查看防火墙状态"
-        echo "4. 启用 ufw"
+        echo "1. 查看 UFW 状态"
+        echo "2. 放行 SSH/HTTP/HTTPS"
+        echo "3. 启用 UFW"
+        echo "4. 禁用 UFW"
         echo "0. 返回"
         echo
-        read -rp "请选择: " choice
+        printf "请选择: "
 
-        case "${choice}" in
-            1) open_common_ports; pause ;;
-            2) open_custom_port; pause ;;
-            3) show_firewall_status; pause ;;
-            4) enable_ufw; pause ;;
-            0) break ;;
-            *) warn "无效选择"; pause ;;
+        read -r choice || return 0
+
+        case "$choice" in
+            1) xmg_firewall_status; xmg_pause ;;
+            2) xmg_firewall_allow_basic; xmg_pause ;;
+            3) xmg_firewall_enable; xmg_pause ;;
+            4) xmg_firewall_disable; xmg_pause ;;
+            0) return 0 ;;
+            *) xmg_warn "无效选择"; xmg_pause ;;
         esac
     done
 }
