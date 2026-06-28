@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-XMG_VERSION="1.4.0"
+XMG_VERSION="1.5.0"
 XMG_LIB_DIR="${XMG_LIB_DIR:-/usr/local/lib/xmg}"
 
 if [ ! -d "$XMG_LIB_DIR" ]; then
@@ -10,7 +10,6 @@ if [ ! -d "$XMG_LIB_DIR" ]; then
     exit 1
 fi
 
-# 默认启动路径只加载低资源监控必需模块
 # shellcheck source=/usr/local/lib/xmg/common.sh
 source "$XMG_LIB_DIR/common.sh"
 
@@ -35,16 +34,16 @@ XMG $XMG_VERSION
   xmg version         显示版本
   xmg help            显示帮助
 
+按键:
+  m                   进入管理菜单
+  q                   退出
+
 环境变量:
   XMG_LIB_DIR         库目录，默认 /usr/local/lib/xmg
   XMG_CACHE_TTL       基础系统状态缓存秒数，默认 3
   XMG_SERVICE_TTL     服务状态缓存秒数，默认 5
-  XMG_MONITOR_INTERVAL UI 刷新间隔，默认 1
+  XMG_MONITOR_INTERVAL UI刷新间隔，默认 1
   XMG_COLOR           auto/always/never，默认 auto
-
-按键:
-  m                   进入管理菜单
-  q                   退出
 EOF
 }
 
