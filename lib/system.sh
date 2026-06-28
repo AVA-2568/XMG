@@ -54,14 +54,16 @@ show_panel_header() {
     local caddy_status
     local xray_status
 
-    caddy_status="$(get_service_status caddy)"
-    xray_status="$(get_service_status xray)"
+    caddy_status="$(get_service_status caddy 2>/dev/null || echo unknown)"
+    xray_status="$(get_service_status xray 2>/dev/null || echo unknown)"
+
+    clear
 
     echo "===================================="
     echo "  XMG 轻量级 VPS 管理器"
     echo "  Version: ${XMG_VERSION}"
     echo "------------------------------------"
-    printf "  Caddy: %-12s | Xray: %-12s\n" "${caddy_status}" "${xray_status}"
+    printf "  Caddy: %s | Xray: %s\n" "${caddy_status}" "${xray_status}"
     echo "===================================="
 }
 
