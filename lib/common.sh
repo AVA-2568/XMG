@@ -23,6 +23,37 @@ xmg_color_enabled() {
     esac
 }
 
+# ===== 替换原有的 xmg_c / xmg_reset，新增颜色缓存 =====
+# 位置：在 XMG_COLOR 变量定义之后，xmg_info 函数之前
+
+# 颜色转义序列缓存变量（初始化后直接引用，避免 $() fork）
+XMG_C_RESET=""
+XMG_C_BOLD=""
+XMG_C_RED=""
+XMG_C_GREEN=""
+XMG_C_YELLOW=""
+XMG_C_CYAN=""
+
+xmg_color_init() {
+    # 初始化颜色缓存，只在启动时调用一次
+    if xmg_color_enabled; then
+        XMG_C_RESET=$'\033[0m'
+        XMG_C_BOLD=$'\033[1m'
+        XMG_C_RED=$'\033[31m'
+        XMG_C_GREEN=$'\033[32m'
+        XMG_C_YELLOW=$'\033[33m'
+        XMG_C_CYAN=$'\033[36m'
+    else
+        XMG_C_RESET=""
+        XMG_C_BOLD=""
+        XMG_C_RED=""
+        XMG_C_GREEN=""
+        XMG_C_YELLOW=""
+        XMG_C_CYAN=""
+    fi
+}
+
+# 保留原函数供非热路径使用（如 install.sh 等一次性脚本）
 xmg_c() {
     local code="$1"
     if xmg_color_enabled; then
@@ -34,6 +65,19 @@ xmg_reset() {
     if xmg_color_enabled; then
         printf '\033[0m'
     fi
+}
+
+# 优化后的日志函数，使用缓存变量避免 $() fork
+xmg_info() {
+    printf '%s[INFO]%s %s\n' "$XMG_C_GREEN" "$XMG_C_RESET" "$*"
+}
+
+xmg_warn() {
+    printf '%s[WARN]%s %s\n' "$XMG_C_YELLOW" "$XMG_C_RESET" "$*" >&2
+}
+
+xmg_error() {
+    printf '%s[ERROR]%s %s\n' "$XMG_C_RED" "$XMG_C_RESET" "$*" >&2
 }
 
 xmg_info() {
