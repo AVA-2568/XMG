@@ -15,11 +15,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/AVA-2568/xmg/main/install.sh
 
 ```
 xmg #运行
-#更新
-cd /opt/xmg
-git pull --ff-only
-#卸载
-bash /opt/xmg/uninstall.sh
 ```
 
 ---
