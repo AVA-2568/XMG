@@ -129,34 +129,30 @@ xmg_hex_port() {
     printf '%04X' "$port"
 }
 
+# ===== 替换 xmg_proc_port_listening =====
+# 位置：xmg_hex_port 函数之后，xmg_port_status 函数之前
 xmg_proc_port_listening() {
     local port="$1"
     local hex=""
     hex="$(xmg_hex_port "$port")"
 
-    awk -v p="$hex" '
-        BEGIN { found=0 }          # <-- 显式初始化
-        NR > 1 {
-            split($2, a, ":")
-            if (toupper(a[2]) == p && $4 == "0A") {
-                found=1
-                exit
-            }
-        }
-        END { exit found ? 0 : 1 }
-    ' /proc/net/tcp 2>/dev/null && return 0
+    # 使用 bash 内建 read 循环替代 awk，避免 fork
+    # /proc/net/tcp 格式: sl local_address rem_address st ...
+    # st=0A 表示 LISTEN
+    local line addr state
+    local file
+    for file in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$file" ] || continue
+        # 跳过首行标题，使用文件描述符避免子shell
+        while IFS=' ' read -r _ addr _ state _; do
+            # 提取端口部分（冒号后4位十六进制）
+            if [[ "${addr##*:}" == "$hex" ]] && [[ "$state" == "0A" ]]; then
+                return 0
+            fi
+        done < "$file"
+    done
 
-    awk -v p="$hex" '
-        BEGIN { found=0 }          # <-- 显式初始化
-        NR > 1 {
-            split($2, a, ":")
-            if (toupper(a[2]) == p && $4 == "0A") {
-                found=1
-                exit
-            }
-        }
-        END { exit found ? 0 : 1 }
-    ' /proc/net/tcp6 2>/dev/null
+    return 1
 }
 
 xmg_port_status() {
