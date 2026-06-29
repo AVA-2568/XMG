@@ -60,34 +60,42 @@ xmg_read_uptime() {
     ' /proc/uptime 2>/dev/null || echo "unknown"
 }
 
-xmg_read_mem_percent() {
-    awk '
-        /MemTotal:/ {total=$2}
-        /MemAvailable:/ {avail=$2}
-        END {
-            if (total > 0 && avail >= 0) {
-                used=total-avail
-                printf "%.1f%%", used*100/total
-            } else {
-                printf "unknown"
-            }
-        }
-    ' /proc/meminfo 2>/dev/null || echo "unknown"
-}
+# ===== 修改 xmg_system_refresh_basic =====
+# 位置：lib/system.sh 中的 xmg_system_refresh_basic 函数
+# 将原来的两行：
+#   XMG_STATUS_MEM_PERCENT="$(xmg_read_mem_percent)"
+#   XMG_STATUS_MEM_DETAIL="$(xmg_read_mem_detail)"
+# 替换为：
 
-xmg_read_mem_detail() {
-    awk '
-        /MemTotal:/ {total=$2}
-        /MemAvailable:/ {avail=$2}
-        END {
-            if (total > 0 && avail >= 0) {
-                used=total-avail
-                printf "%.0fMiB/%.0fMiB", used/1024, total/1024
-            } else {
-                printf "unknown"
-            }
-        }
-    ' /proc/meminfo 2>/dev/null || echo "unknown"
+xmg_system_refresh_basic() {
+    local force="${1:-}"
+    local now=0
+    local mem_result=""
+
+    now="$(xmg_now_s)"
+
+    if [ "$force" != "force" ] && [ $((now - XMG_CACHE_TS)) -lt "$XMG_CACHE_TTL" ]; then
+        return 0
+    fi
+
+    XMG_CACHE_TS="$now"
+
+    XMG_STATUS_TIME="$(xmg_read_time)"
+    XMG_STATUS_HOSTNAME="$(xmg_read_hostname)"
+    XMG_STATUS_KERNEL="$(xmg_read_kernel)"
+    XMG_STATUS_UPTIME="$(xmg_read_uptime)"
+    XMG_STATUS_LOAD="$(xmg_read_load)"
+
+    # 合并读取：一次 awk 获取两个值，减少一次 /proc/meminfo 读取和一次 fork
+    mem_result="$(xmg_read_mem)"
+    XMG_STATUS_MEM_PERCENT="${mem_result%%|*}"
+    XMG_STATUS_MEM_DETAIL="${mem_result##*|}"
+
+    XMG_STATUS_DISK_ROOT="$(xmg_read_disk_root)"
+
+    XMG_STATUS_PORT_22="$(xmg_port_status 22)"
+    XMG_STATUS_PORT_80="$(xmg_port_status 80)"
+    XMG_STATUS_PORT_443="$(xmg_port_status 443)"
 }
 
 xmg_read_disk_root() {
