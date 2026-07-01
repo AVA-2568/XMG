@@ -7,11 +7,8 @@
 # 说明：
 #   - 本模块只管理 Caddy 的安装、卸载、启动、停止、重启、重载和状态查看
 #   - 本模块不创建、不编辑、不修改 Caddyfile
-#   - 保留 XMG_CADDY_* 关键参数和 xmg_caddy_* 对外函数名
-#   - 安装策略：
-#       1. 优先使用 apt / dnf / yum
-#       2. apt update 被 Cloudflare WARP 源阻塞时，临时绕过 WARP 源
-#       3. 包管理器安装失败时，回退到 GitHub 官方二进制安装
+#   - 默认不执行 apt-get update，避免被第三方 APT 源阻塞
+#   - APT 安装失败后，自动回退到 Caddy 官方二进制安装
 #
 
 # ===== 安全加载 =====
@@ -21,16 +18,26 @@ fi
 XMG_CADDY_SH_LOADED=1
 
 # ===== 默认配置 =====
+# 这些变量名属于模块接口，不要改名。
 XMG_CADDY_SERVICE="${XMG_CADDY_SERVICE:-caddy}"
 XMG_CADDY_APT_KEY_URL="${XMG_CADDY_APT_KEY_URL:-https://dl.cloudsmith.io/public/caddy/stable/gpg.key}"
 XMG_CADDY_APT_SOURCE_URL="${XMG_CADDY_APT_SOURCE_URL:-https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt}"
 XMG_CADDY_KEYRING_PATH="${XMG_CADDY_KEYRING_PATH:-/usr/share/keyrings/caddy-stable-archive-keyring.gpg}"
 XMG_CADDY_APT_SOURCE_PATH="${XMG_CADDY_APT_SOURCE_PATH:-/etc/apt/sources.list.d/caddy-stable.list}"
 
-# 新增可选参数：不影响原有主框架调用
+# 新增参数：不破坏旧接口。
+# auto   : 先尝试包管理器，不执行 apt update，失败后走二进制
+# binary : 完全绕过包管理器，直接二进制安装
+XMG_CADDY_INSTALL_MODE="${XMG_CADDY_INSTALL_MODE:-auto}"
+
+# 是否允许二进制兜底安装。
 XMG_CADDY_ENABLE_BINARY_FALLBACK="${XMG_CADDY_ENABLE_BINARY_FALLBACK:-1}"
-XMG_CADDY_TEMP_DISABLE_CLOUDFLARE_SOURCE="${XMG_CADDY_TEMP_DISABLE_CLOUDFLARE_SOURCE:-1}"
+
+# 二进制安装路径。
 XMG_CADDY_BINARY_INSTALL_PATH="${XMG_CADDY_BINARY_INSTALL_PATH:-/usr/local/bin/caddy}"
+
+# Caddy 官方下载 API。
+XMG_CADDY_DOWNLOAD_BASE_URL="${XMG_CADDY_DOWNLOAD_BASE_URL:-https://caddyserver.com/api/download}"
 
 # ===== 兼容函数 =====
 
@@ -120,14 +127,25 @@ xmg_caddy_is_systemd_available() {
     xmg_cmd_exists systemctl
 }
 
-xmg_caddy_print_version() {
+xmg_caddy_get_bin() {
     if xmg_cmd_exists caddy; then
-        caddy version 2>/dev/null || true
-    elif [ -x "$XMG_CADDY_BINARY_INSTALL_PATH" ]; then
-        "$XMG_CADDY_BINARY_INSTALL_PATH" version 2>/dev/null || true
-    else
-        return 1
+        command -v caddy
+        return 0
     fi
+
+    if [ -x "$XMG_CADDY_BINARY_INSTALL_PATH" ]; then
+        printf '%s\n' "$XMG_CADDY_BINARY_INSTALL_PATH"
+        return 0
+    fi
+
+    return 1
+}
+
+xmg_caddy_print_version() {
+    local caddy_bin=""
+
+    caddy_bin="$(xmg_caddy_get_bin)" || return 1
+    "$caddy_bin" version 2>/dev/null
 }
 
 # ===== 下载辅助 =====
@@ -153,219 +171,7 @@ xmg_caddy_download() {
     return 1
 }
 
-# ===== APT 辅助：绕过 Cloudflare WARP 源 =====
-
-XMG_CADDY_CF_DISABLED_FILES=""
-
-xmg_caddy_has_cloudflare_apt_source() {
-    grep -R "pkg.cloudflareclient.com" \
-        /etc/apt/sources.list \
-        /etc/apt/sources.list.d \
-        >/dev/null 2>&1
-}
-
-xmg_caddy_disable_cloudflare_source_files() {
-    local file=""
-    local backup=""
-
-    XMG_CADDY_CF_DISABLED_FILES=""
-
-    if [ "$XMG_CADDY_TEMP_DISABLE_CLOUDFLARE_SOURCE" != "1" ]; then
-        return 1
-    fi
-
-    if [ ! -d /etc/apt/sources.list.d ]; then
-        return 1
-    fi
-
-    while IFS= read -r file; do
-        [ -f "$file" ] || continue
-
-        backup="${file}.xmg-caddy-disabled"
-
-        if mv "$file" "$backup"; then
-            XMG_CADDY_CF_DISABLED_FILES="${XMG_CADDY_CF_DISABLED_FILES}${file}|${backup}
-"
-            xmg_warn "已临时禁用 Cloudflare WARP APT 源：$file"
-        fi
-    done <<EOF
-$(find /etc/apt/sources.list.d -type f \( -name '*.list' -o -name '*.sources' \) -print 2>/dev/null | while read -r f; do
-    grep -q "pkg.cloudflareclient.com" "$f" 2>/dev/null && printf '%s\n' "$f"
-done)
-EOF
-
-    if [ -n "$XMG_CADDY_CF_DISABLED_FILES" ]; then
-        return 0
-    fi
-
-    return 1
-}
-
-xmg_caddy_restore_cloudflare_source_files() {
-    local line=""
-    local original=""
-    local backup=""
-
-    [ -n "$XMG_CADDY_CF_DISABLED_FILES" ] || return 0
-
-    while IFS= read -r line; do
-        [ -n "$line" ] || continue
-
-        original="${line%%|*}"
-        backup="${line#*|}"
-
-        if [ -f "$backup" ]; then
-            mv "$backup" "$original" \
-                && xmg_info "已恢复 Cloudflare WARP APT 源：$original" \
-                || xmg_warn "恢复 Cloudflare WARP APT 源失败：$original"
-        fi
-    done <<EOF
-$XMG_CADDY_CF_DISABLED_FILES
-EOF
-
-    XMG_CADDY_CF_DISABLED_FILES=""
-}
-
-xmg_caddy_apt_update_smart() {
-    xmg_info "执行 apt-get update"
-
-    if apt-get update; then
-        return 0
-    fi
-
-    xmg_warn "apt-get update 失败"
-
-    if xmg_caddy_has_cloudflare_apt_source; then
-        xmg_warn "检测到 Cloudflare WARP/Client APT 源"
-        xmg_warn "该源缺少 GPG key 时会阻塞整个 apt update"
-
-        if xmg_caddy_disable_cloudflare_source_files; then
-            xmg_warn "已临时绕过 Cloudflare WARP 源，再次执行 apt-get update"
-
-            if apt-get update; then
-                xmg_caddy_restore_cloudflare_source_files
-                return 0
-            fi
-
-            xmg_caddy_restore_cloudflare_source_files
-        else
-            xmg_warn "未能自动临时禁用 Cloudflare WARP 源"
-            xmg_warn "如果该源写在 /etc/apt/sources.list 主文件中，请手动处理"
-        fi
-    fi
-
-    return 1
-}
-
-# ===== APT 安装 =====
-
-xmg_caddy_install_by_apt() {
-    local tmp_key=""
-    local tmp_source=""
-
-    xmg_info "检测到 apt-get，使用 Debian/Ubuntu/Raspbian 安装路径"
-
-    export DEBIAN_FRONTEND=noninteractive
-
-    if ! xmg_caddy_apt_update_smart; then
-        xmg_warn "apt update 失败，继续尝试使用现有缓存安装依赖"
-    fi
-
-    if ! apt-get install -y \
-        debian-keyring \
-        debian-archive-keyring \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg; then
-        xmg_warn "安装 Caddy APT 依赖失败"
-
-        if ! xmg_cmd_exists curl || ! xmg_cmd_exists gpg; then
-            xmg_warn "缺少 curl 或 gpg，无法继续 APT 官方源安装"
-            return 1
-        fi
-    fi
-
-    install -d -m 0755 /usr/share/keyrings || return 1
-    install -d -m 0755 /etc/apt/sources.list.d || return 1
-
-    tmp_key="$(mktemp)" || return 1
-    tmp_source="$(mktemp)" || {
-        rm -f "$tmp_key"
-        return 1
-    }
-
-    if ! xmg_caddy_download "$XMG_CADDY_APT_KEY_URL" "$tmp_key"; then
-        rm -f "$tmp_key" "$tmp_source"
-        xmg_warn "下载 Caddy GPG key 失败"
-        return 1
-    fi
-
-    if ! gpg --dearmor --yes -o "$XMG_CADDY_KEYRING_PATH" "$tmp_key"; then
-        rm -f "$tmp_key" "$tmp_source"
-        xmg_warn "转换 Caddy GPG key 失败"
-        return 1
-    fi
-
-    if ! xmg_caddy_download "$XMG_CADDY_APT_SOURCE_URL" "$tmp_source"; then
-        rm -f "$tmp_key" "$tmp_source"
-        xmg_warn "下载 Caddy APT 源配置失败"
-        return 1
-    fi
-
-    if ! grep -qE '^[[:space:]]*deb[[:space:]]' "$tmp_source"; then
-        rm -f "$tmp_key" "$tmp_source"
-        xmg_warn "Caddy APT 源配置内容异常，可能下载到了 HTML 错误页"
-        return 1
-    fi
-
-    if ! install -m 0644 "$tmp_source" "$XMG_CADDY_APT_SOURCE_PATH"; then
-        rm -f "$tmp_key" "$tmp_source"
-        xmg_warn "写入 Caddy APT 源失败"
-        return 1
-    fi
-
-    rm -f "$tmp_key" "$tmp_source"
-
-    if ! xmg_caddy_apt_update_smart; then
-        xmg_warn "添加 Caddy APT 源后 apt update 仍失败"
-        xmg_warn "继续尝试直接 apt-get install caddy"
-    fi
-
-    if apt-get install -y caddy; then
-        xmg_info "APT 安装 Caddy 成功"
-        return 0
-    fi
-
-    xmg_warn "APT 安装 Caddy 失败"
-    return 1
-}
-
-# ===== DNF/YUM 安装 =====
-
-xmg_caddy_install_by_dnf() {
-    xmg_info "检测到 dnf，使用 Fedora/RHEL/CentOS Stream/Rocky/AlmaLinux 安装路径"
-
-    dnf install -y dnf-plugins-core || return 1
-    dnf copr enable -y @caddy/caddy || return 1
-    dnf install -y caddy || return 1
-
-    xmg_info "DNF 安装 Caddy 成功"
-    return 0
-}
-
-xmg_caddy_install_by_yum() {
-    xmg_info "检测到 yum，使用 CentOS/RHEL 7 安装路径"
-
-    yum install -y yum-plugin-copr || return 1
-    yum copr enable -y @caddy/caddy || return 1
-    yum install -y caddy || return 1
-
-    xmg_info "YUM 安装 Caddy 成功"
-    return 0
-}
-
-# ===== GitHub 二进制回退安装 =====
+# ===== 架构识别 =====
 
 xmg_caddy_get_linux_arch() {
     local machine=""
@@ -394,6 +200,66 @@ xmg_caddy_get_linux_arch() {
     esac
 }
 
+# ===== APT 安装：不执行 apt-get update =====
+
+xmg_caddy_install_by_apt_no_update() {
+    xmg_info "检测到 apt-get，尝试不执行 apt-get update 直接安装 Caddy"
+
+    if ! xmg_cmd_exists apt-get; then
+        return 1
+    fi
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    xmg_warn "本次不会执行 apt-get update"
+    xmg_warn "如果 APT 缓存中没有 Caddy 包，此步骤可能失败，随后会尝试二进制安装"
+
+    if apt-get install -y caddy; then
+        xmg_info "APT 直接安装 Caddy 成功"
+        return 0
+    fi
+
+    xmg_warn "APT 直接安装 Caddy 失败"
+    return 1
+}
+
+# ===== DNF/YUM 安装 =====
+# 注意：dnf/yum 自身可能刷新元数据，但不会执行 apt-get update。
+
+xmg_caddy_install_by_dnf() {
+    if ! xmg_cmd_exists dnf; then
+        return 1
+    fi
+
+    xmg_info "检测到 dnf，尝试安装 Caddy"
+
+    if dnf install -y caddy; then
+        xmg_info "DNF 安装 Caddy 成功"
+        return 0
+    fi
+
+    xmg_warn "DNF 直接安装 Caddy 失败"
+    return 1
+}
+
+xmg_caddy_install_by_yum() {
+    if ! xmg_cmd_exists yum; then
+        return 1
+    fi
+
+    xmg_info "检测到 yum，尝试安装 Caddy"
+
+    if yum install -y caddy; then
+        xmg_info "YUM 安装 Caddy 成功"
+        return 0
+    fi
+
+    xmg_warn "YUM 直接安装 Caddy 失败"
+    return 1
+}
+
+# ===== 二进制安装准备 =====
+
 xmg_caddy_create_user_and_dirs() {
     if ! id caddy >/dev/null 2>&1; then
         if xmg_cmd_exists useradd; then
@@ -407,13 +273,20 @@ xmg_caddy_create_user_and_dirs() {
         fi
     fi
 
-    install -d -m 0755 /etc/caddy
-    install -d -m 0755 /var/lib/caddy
-    install -d -m 0755 /var/log/caddy
+    install -d -m 0755 /etc/caddy \
+        || return 1
+
+    install -d -m 0755 /var/lib/caddy \
+        || return 1
+
+    install -d -m 0755 /var/log/caddy \
+        || return 1
 
     if id caddy >/dev/null 2>&1; then
         chown -R caddy:caddy /var/lib/caddy /var/log/caddy 2>/dev/null || true
     fi
+
+    return 0
 }
 
 xmg_caddy_install_systemd_unit_for_binary() {
@@ -457,33 +330,30 @@ WorkingDirectory=/var/lib/caddy
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
     xmg_info "已创建 systemd service：$unit_path"
+
+    return 0
 }
 
-xmg_caddy_install_by_github_binary() {
+# ===== 官方二进制安装：完全不依赖 apt update =====
+
+xmg_caddy_install_by_binary() {
     local arch=""
-    local latest_url=""
-    local version=""
-    local asset=""
     local url=""
     local tmp_dir=""
-    local tar_file=""
+    local tmp_bin=""
 
     if [ "$XMG_CADDY_ENABLE_BINARY_FALLBACK" != "1" ]; then
-        xmg_warn "GitHub 二进制回退安装已关闭"
+        xmg_warn "二进制安装已关闭"
         return 1
     fi
 
-    xmg_info "尝试使用 GitHub 官方二进制安装 Caddy"
+    xmg_info "尝试使用 Caddy 官方二进制安装"
+    xmg_warn "此方式不会执行 apt-get update，也不会修改第三方 APT 源"
 
-    if ! xmg_cmd_exists curl; then
-        xmg_warn "缺少 curl，无法获取 GitHub latest release"
-        return 1
-    fi
-
-    if ! xmg_cmd_exists tar; then
-        xmg_warn "缺少 tar，无法解压 Caddy 二进制包"
+    if ! xmg_cmd_exists curl && ! xmg_cmd_exists wget; then
+        xmg_warn "缺少 curl/wget，无法下载 Caddy 二进制文件"
         return 1
     fi
 
@@ -492,60 +362,56 @@ xmg_caddy_install_by_github_binary() {
         return 1
     }
 
-    latest_url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/caddyserver/caddy/releases/latest)" || {
-        xmg_warn "获取 Caddy latest release 失败"
+    tmp_dir="$(mktemp -d)" || return 1
+    tmp_bin="${tmp_dir}/caddy"
+
+    url="${XMG_CADDY_DOWNLOAD_BASE_URL}?os=linux&arch=${arch}"
+
+    xmg_info "下载 Caddy 官方二进制：linux/${arch}"
+
+    if ! xmg_caddy_download "$url" "$tmp_bin"; then
+        rm -rf "$tmp_dir"
+        xmg_warn "下载 Caddy 二进制失败"
+        return 1
+    fi
+
+    chmod 0755 "$tmp_bin" || {
+        rm -rf "$tmp_dir"
+        xmg_warn "设置 Caddy 二进制权限失败"
         return 1
     }
 
-    version="${latest_url##*/}"
-
-    case "$version" in
-        v*)
-            ;;
-        *)
-            xmg_warn "无法解析 Caddy release 版本：$latest_url"
-            return 1
-            ;;
-    esac
-
-    asset="caddy_${version#v}_linux_${arch}.tar.gz"
-    url="https://github.com/caddyserver/caddy/releases/download/${version}/${asset}"
-
-    tmp_dir="$(mktemp -d)" || return 1
-    tar_file="${tmp_dir}/${asset}"
-
-    xmg_info "下载 Caddy：$url"
-
-    if ! xmg_caddy_download "$url" "$tar_file"; then
+    if ! "$tmp_bin" version >/dev/null 2>&1; then
         rm -rf "$tmp_dir"
-        xmg_warn "下载 Caddy 二进制包失败"
+        xmg_warn "下载的文件不能正常执行，可能不是有效的 Caddy 二进制"
         return 1
     fi
 
-    if ! tar -xzf "$tar_file" -C "$tmp_dir"; then
+    install -d -m 0755 "$(dirname "$XMG_CADDY_BINARY_INSTALL_PATH")" || {
         rm -rf "$tmp_dir"
-        xmg_warn "解压 Caddy 二进制包失败"
+        xmg_warn "创建二进制安装目录失败"
         return 1
-    fi
+    }
 
-    if [ ! -f "${tmp_dir}/caddy" ]; then
+    install -m 0755 "$tmp_bin" "$XMG_CADDY_BINARY_INSTALL_PATH" || {
         rm -rf "$tmp_dir"
-        xmg_warn "二进制包中未找到 caddy 文件"
-        return 1
-    fi
-
-    install -m 0755 "${tmp_dir}/caddy" "$XMG_CADDY_BINARY_INSTALL_PATH" || {
-        rm -rf "$tmp_dir"
-        xmg_warn "安装 Caddy 二进制文件失败"
+        xmg_warn "安装 Caddy 二进制失败"
         return 1
     }
 
     rm -rf "$tmp_dir"
 
-    xmg_caddy_create_user_and_dirs
-    xmg_caddy_install_systemd_unit_for_binary
+    xmg_caddy_create_user_and_dirs || {
+        xmg_warn "创建 Caddy 用户或目录失败"
+        return 1
+    }
 
-    xmg_info "GitHub 二进制安装 Caddy 成功"
+    xmg_caddy_install_systemd_unit_for_binary || {
+        xmg_warn "创建 systemd service 失败"
+        return 1
+    }
+
+    xmg_info "Caddy 官方二进制安装成功"
     "$XMG_CADDY_BINARY_INSTALL_PATH" version 2>/dev/null || true
 
     return 0
@@ -559,36 +425,47 @@ xmg_caddy_install_update() {
 
     local installed=0
 
-    if xmg_cmd_exists apt-get; then
-        if xmg_caddy_install_by_apt; then
-            installed=1
-        else
-            xmg_warn "APT 安装路径失败，准备尝试其他方式"
-        fi
-    elif xmg_cmd_exists dnf; then
-        if xmg_caddy_install_by_dnf; then
-            installed=1
-        else
-            xmg_warn "DNF 安装路径失败，准备尝试其他方式"
-        fi
-    elif xmg_cmd_exists yum; then
-        if xmg_caddy_install_by_yum; then
-            installed=1
-        else
-            xmg_warn "YUM 安装路径失败，准备尝试其他方式"
-        fi
-    else
-        xmg_warn "未检测到 apt-get / dnf / yum"
-    fi
+    case "$XMG_CADDY_INSTALL_MODE" in
+        binary)
+            xmg_info "安装模式：binary，直接使用官方二进制安装"
+            if xmg_caddy_install_by_binary; then
+                installed=1
+            fi
+            ;;
+        auto|"")
+            xmg_info "安装模式：auto"
+            xmg_warn "默认不会执行 apt-get update"
+
+            if xmg_cmd_exists apt-get; then
+                if xmg_caddy_install_by_apt_no_update; then
+                    installed=1
+                fi
+            elif xmg_cmd_exists dnf; then
+                if xmg_caddy_install_by_dnf; then
+                    installed=1
+                fi
+            elif xmg_cmd_exists yum; then
+                if xmg_caddy_install_by_yum; then
+                    installed=1
+                fi
+            else
+                xmg_warn "未检测到 apt-get / dnf / yum"
+            fi
+
+            if [ "$installed" -ne 1 ]; then
+                xmg_warn "包管理器安装失败，开始尝试官方二进制安装"
+                if xmg_caddy_install_by_binary; then
+                    installed=1
+                fi
+            fi
+            ;;
+        *)
+            xmg_die "未知安装模式：$XMG_CADDY_INSTALL_MODE"
+            ;;
+    esac
 
     if [ "$installed" -ne 1 ]; then
-        if xmg_caddy_install_by_github_binary; then
-            installed=1
-        fi
-    fi
-
-    if [ "$installed" -ne 1 ]; then
-        xmg_die "所有 Caddy 安装方式均失败"
+        xmg_die "Caddy 安装失败"
     fi
 
     if ! xmg_caddy_binary_exists; then
@@ -614,7 +491,7 @@ xmg_caddy_install_update() {
 
         if [ ! -f /etc/caddy/Caddyfile ]; then
             xmg_warn "未找到 /etc/caddy/Caddyfile"
-            xmg_warn "本模块不会创建 Caddyfile，因此服务启动可能失败"
+            xmg_warn "本模块不创建 Caddyfile，因此服务启动可能失败"
         fi
 
         if systemctl start "$XMG_CADDY_SERVICE" >/dev/null 2>&1; then
@@ -720,14 +597,10 @@ xmg_caddy_status() {
 xmg_caddy_validate_config() {
     local caddy_bin=""
 
-    if xmg_cmd_exists caddy; then
-        caddy_bin="$(command -v caddy)"
-    elif [ -x "$XMG_CADDY_BINARY_INSTALL_PATH" ]; then
-        caddy_bin="$XMG_CADDY_BINARY_INSTALL_PATH"
-    else
+    caddy_bin="$(xmg_caddy_get_bin)" || {
         xmg_warn "caddy 命令不存在，无法校验配置"
         return 1
-    fi
+    }
 
     if [ -f /etc/caddy/Caddyfile ]; then
         "$caddy_bin" validate --config /etc/caddy/Caddyfile || return 1
@@ -755,14 +628,27 @@ xmg_caddy_diag() {
     echo "uid=$(id -u), user=$(id -un 2>/dev/null || echo unknown)"
 
     echo
-    echo "[包管理器检测]"
-    for cmd in apt-get dnf yum curl wget gpg tar systemctl caddy; do
+    echo "[安装模式]"
+    echo "XMG_CADDY_INSTALL_MODE=$XMG_CADDY_INSTALL_MODE"
+    echo "XMG_CADDY_ENABLE_BINARY_FALLBACK=$XMG_CADDY_ENABLE_BINARY_FALLBACK"
+    echo "XMG_CADDY_BINARY_INSTALL_PATH=$XMG_CADDY_BINARY_INSTALL_PATH"
+
+    echo
+    echo "[命令检测]"
+    for cmd in apt-get dnf yum curl wget systemctl caddy; do
         if xmg_cmd_exists "$cmd"; then
             echo "$cmd: $(command -v "$cmd")"
         else
             echo "$cmd: 未检测到"
         fi
     done
+
+    echo
+    echo "[Cloudflare WARP APT 源检测]"
+    grep -R "pkg.cloudflareclient.com" \
+        /etc/apt/sources.list \
+        /etc/apt/sources.list.d \
+        2>/dev/null || echo "未检测到 Cloudflare WARP APT 源"
 
     echo
     echo "[Caddy 版本]"
@@ -773,36 +659,20 @@ xmg_caddy_diag() {
     fi
 
     echo
-    echo "[Cloudflare WARP APT 源检测]"
-    grep -R "pkg.cloudflareclient.com" \
-        /etc/apt/sources.list \
-        /etc/apt/sources.list.d \
-        2>/dev/null || echo "未检测到 Cloudflare WARP APT 源"
-
-    echo
-    echo "[Caddy APT 源文件]"
-    if [ -f "$XMG_CADDY_APT_SOURCE_PATH" ]; then
-        echo "存在：$XMG_CADDY_APT_SOURCE_PATH"
-        sed -n '1,20p' "$XMG_CADDY_APT_SOURCE_PATH"
-    else
-        echo "不存在：$XMG_CADDY_APT_SOURCE_PATH"
-    fi
-
-    echo
-    echo "[Caddy APT keyring]"
-    if [ -f "$XMG_CADDY_KEYRING_PATH" ]; then
-        echo "存在：$XMG_CADDY_KEYRING_PATH"
-        ls -l "$XMG_CADDY_KEYRING_PATH"
-    else
-        echo "不存在：$XMG_CADDY_KEYRING_PATH"
-    fi
-
-    echo
     echo "[Caddy 二进制路径]"
     if [ -x "$XMG_CADDY_BINARY_INSTALL_PATH" ]; then
         ls -l "$XMG_CADDY_BINARY_INSTALL_PATH"
     else
         echo "不存在：$XMG_CADDY_BINARY_INSTALL_PATH"
+    fi
+
+    echo
+    echo "[APT 源文件]"
+    if [ -f "$XMG_CADDY_APT_SOURCE_PATH" ]; then
+        echo "存在：$XMG_CADDY_APT_SOURCE_PATH"
+        sed -n '1,20p' "$XMG_CADDY_APT_SOURCE_PATH"
+    else
+        echo "不存在：$XMG_CADDY_APT_SOURCE_PATH"
     fi
 
     echo
@@ -839,14 +709,16 @@ xmg_caddy_menu() {
         echo "7. 查看 Caddy 状态"
         echo "8. 校验 Caddyfile"
         echo "9. 安装诊断"
+        echo "10. 强制使用官方二进制安装"
         echo "0. 返回"
         echo
         echo "说明:"
         echo "  - XMG 只管理 Caddy 服务生命周期"
         echo "  - XMG 不创建、不编辑、不修改 Caddyfile"
-        echo "  - 安装时会优先使用系统包管理器"
-        echo "  - 如果 WARP APT 源阻塞 apt update，会临时绕过"
-        echo "  - 如果包管理器安装失败，会尝试 GitHub 官方二进制安装"
+        echo "  - 默认不会执行 apt-get update"
+        echo "  - 默认先尝试 apt-get install caddy"
+        echo "  - APT 失败后会回退到官方二进制安装"
+        echo "  - 如需完全绕过 APT，可选择 10"
         echo
         printf "请选择: "
 
@@ -887,6 +759,11 @@ xmg_caddy_menu() {
                 ;;
             9)
                 xmg_caddy_diag
+                xmg_pause
+                ;;
+            10)
+                XMG_CADDY_INSTALL_MODE="binary"
+                xmg_caddy_install_update
                 xmg_pause
                 ;;
             0)
