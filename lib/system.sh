@@ -180,10 +180,7 @@ xmg_system_refresh_basic() {
     XMG_STATUS_KERNEL="$(xmg_read_kernel)"
     XMG_STATUS_UPTIME="$(xmg_read_uptime)"
     XMG_STATUS_LOAD="$(xmg_read_load)"
-    XMG_STATUS_MEM_PERCENT="$(xmg_read_mem_percent)"
-    XMG_STATUS_MEM_DETAIL="$(xmg_read_mem_detail)"
     XMG_STATUS_DISK_ROOT="$(xmg_read_disk_root)"
-
     XMG_STATUS_PORT_22="$(xmg_port_status 22)"
     XMG_STATUS_PORT_80="$(xmg_port_status 80)"
     XMG_STATUS_PORT_443="$(xmg_port_status 443)"
