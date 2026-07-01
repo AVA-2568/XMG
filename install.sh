@@ -11,7 +11,7 @@ s** -Eeuo pipefail
 # 这里请按你的实际 GitHu**仓库 Raw 地址设置
 # 如果你的仓库名实际是大写 XMG，请改**
 #   https://raw.githubuserconten**com/AVA-2568/XMG/main
-XMG_BASE_UR**"${XMG_BASE_URL:-https://raw.gith**usercontent.com/AVA-2568/xmg/main**
+XMG_BASE_UR**"${XMG_BASE_URL:-https://raw.githubusercontent.com/AVA-2568/xmg/main**
 
 XMG_BIN="${XMG_BIN:-/usr/local/**n/xmg}"
 XMG_LIB_DIR="${XMG_LIB_DI**-/usr/local/lib/xmg}"
