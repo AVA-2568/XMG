@@ -7,7 +7,7 @@
 # 说明：
 #   - 本模块只管理 Caddy 的安装、卸载、启动、停止、重启、重载和状态查看
 #   - 本模块不创建、不编辑、不修改 Caddyfile
-#   - 文件内容应使用 UTF-8 编码保存
+#   - 保留 XMG_* 关键参数和 xmg_caddy_* 对外函数名，方便主框架调用
 #
 
 # ===== 安全加载 =====
@@ -17,6 +17,7 @@ fi
 XMG_CADDY_SH_LOADED=1
 
 # ===== 默认配置 =====
+# 注意：这些变量名属于模块外部接口，不建议改名。
 XMG_CADDY_SERVICE="${XMG_CADDY_SERVICE:-caddy}"
 XMG_CADDY_APT_KEY_URL="${XMG_CADDY_APT_KEY_URL:-https://dl.cloudsmith.io/public/caddy/stable/gpg.key}"
 XMG_CADDY_APT_SOURCE_URL="${XMG_CADDY_APT_SOURCE_URL:-https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt}"
@@ -113,110 +114,109 @@ xmg_caddy_is_systemd_available() {
     xmg_cmd_exists systemctl
 }
 
+# ===== 内部安装函数 =====
+
+xmg_caddy_install_by_apt() {
+    local tmp_key=""
+    local tmp_source=""
+
+    xmg_info "检测到 apt-get，使用 Debian/Ubuntu/Raspbian 安装路径"
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update || xmg_die "apt update 失败"
+
+    apt-get install -y \
+        debian-keyring \
+        debian-archive-keyring \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        || xmg_die "安装 Caddy APT 依赖失败"
+
+    install -d -m 0755 /usr/share/keyrings \
+        || xmg_die "创建 /usr/share/keyrings 失败"
+
+    install -d -m 0755 /etc/apt/sources.list.d \
+        || xmg_die "创建 /etc/apt/sources.list.d 失败"
+
+    tmp_key="$(mktemp)" || xmg_die "创建临时 GPG key 文件失败"
+    tmp_source="$(mktemp)" || {
+        rm -f "$tmp_key"
+        xmg_die "创建临时 APT source 文件失败"
+    }
+
+    if ! curl -fsSL "$XMG_CADDY_APT_KEY_URL" -o "$tmp_key"; then
+        rm -f "$tmp_key" "$tmp_source"
+        xmg_die "下载 Caddy GPG key 失败"
+    fi
+
+    if ! gpg --dearmor --yes -o "$XMG_CADDY_KEYRING_PATH" "$tmp_key"; then
+        rm -f "$tmp_key" "$tmp_source"
+        xmg_die "安装 Caddy keyring 失败"
+    fi
+
+    if ! curl -fsSL "$XMG_CADDY_APT_SOURCE_URL" -o "$tmp_source"; then
+        rm -f "$tmp_key" "$tmp_source"
+        xmg_die "下载 Caddy APT 源配置失败"
+    fi
+
+    # 防止代理、网关、DNS 异常时写入 HTML 错误页
+    if ! grep -qE '^[[:space:]]*deb[[:space:]]' "$tmp_source"; then
+        rm -f "$tmp_key" "$tmp_source"
+        xmg_die "Caddy APT 源配置内容异常"
+    fi
+
+    install -m 0644 "$tmp_source" "$XMG_CADDY_APT_SOURCE_PATH" || {
+        rm -f "$tmp_key" "$tmp_source"
+        xmg_die "写入 Caddy APT 源失败"
+    }
+
+    rm -f "$tmp_key" "$tmp_source"
+
+    apt-get update || xmg_die "添加 Caddy APT 源后 apt update 失败"
+    apt-get install -y caddy || xmg_die "安装 Caddy 失败"
+}
+
+xmg_caddy_install_by_dnf() {
+    xmg_info "检测到 dnf，使用 Fedora/RHEL/CentOS Stream/Rocky/AlmaLinux 安装路径"
+
+    dnf install -y dnf-plugins-core \
+        || xmg_die "安装 dnf-plugins-core 失败"
+
+    dnf copr enable -y @caddy/caddy \
+        || xmg_die "启用 Caddy COPR 源失败"
+
+    dnf install -y caddy \
+        || xmg_die "dnf 安装 Caddy 失败"
+}
+
+xmg_caddy_install_by_yum() {
+    xmg_info "检测到 yum，使用 CentOS/RHEL 7 安装路径"
+
+    yum install -y yum-plugin-copr \
+        || xmg_die "安装 yum-plugin-copr 失败"
+
+    yum copr enable -y @caddy/caddy \
+        || xmg_die "启用 Caddy COPR 源失败"
+
+    yum install -y caddy \
+        || xmg_die "yum 安装 Caddy 失败"
+}
+
 # ===== 安装 / 更新 =====
 
 xmg_caddy_install_update() {
     xmg_require_root
     xmg_info "安装/更新 Caddy"
 
-    local tmp_key=""
-    local tmp_keyring=""
-    local tmp_source=""
-
     if xmg_cmd_exists apt-get; then
-        xmg_info "检测到 apt-get，使用 Debian/Ubuntu/Raspbian 安装路径"
-
-        export DEBIAN_FRONTEND=noninteractive
-
-        apt-get update || xmg_die "apt update 失败"
-
-        apt-get install -y \
-            debian-keyring \
-            debian-archive-keyring \
-            apt-transport-https \
-            ca-certificates \
-            curl \
-            gnupg \
-            || xmg_die "安装 Caddy APT 依赖失败"
-
-        install -d -m 0755 /usr/share/keyrings \
-            || xmg_die "创建 /usr/share/keyrings 失败"
-
-        install -d -m 0755 /etc/apt/sources.list.d \
-            || xmg_die "创建 /etc/apt/sources.list.d 失败"
-
-        tmp_key="$(mktemp)" || xmg_die "创建临时 GPG key 文件失败"
-
-        tmp_keyring="$(mktemp)" || {
-            rm -f "$tmp_key"
-            xmg_die "创建临时 keyring 文件失败"
-        }
-
-        tmp_source="$(mktemp)" || {
-            rm -f "$tmp_key" "$tmp_keyring"
-            xmg_die "创建临时 APT source 文件失败"
-        }
-
-        if ! curl -fsSL "$XMG_CADDY_APT_KEY_URL" -o "$tmp_key"; then
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "下载 Caddy GPG key 失败"
-        fi
-
-        if ! gpg --dearmor --yes -o "$tmp_keyring" "$tmp_key"; then
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "转换 Caddy GPG key 失败"
-        fi
-
-        if ! curl -fsSL "$XMG_CADDY_APT_SOURCE_URL" -o "$tmp_source"; then
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "下载 Caddy APT 源配置失败"
-        fi
-
-        # 防止代理、网关、DNS 异常时写入 HTML 错误页
-        if ! grep -qE '^[[:space:]]*deb[[:space:]]' "$tmp_source"; then
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "Caddy APT 源配置内容异常"
-        fi
-
-        install -m 0644 "$tmp_keyring" "$XMG_CADDY_KEYRING_PATH" || {
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "安装 Caddy keyring 失败"
-        }
-
-        install -m 0644 "$tmp_source" "$XMG_CADDY_APT_SOURCE_PATH" || {
-            rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-            xmg_die "写入 Caddy APT 源失败"
-        }
-
-        rm -f "$tmp_key" "$tmp_keyring" "$tmp_source"
-
-        apt-get update || xmg_die "添加 Caddy APT 源后 apt update 失败"
-        apt-get install -y caddy || xmg_die "安装 Caddy 失败"
-
+        xmg_caddy_install_by_apt
     elif xmg_cmd_exists dnf; then
-        xmg_info "检测到 dnf，使用 Fedora/RHEL/CentOS Stream/Rocky/AlmaLinux 安装路径"
-
-        dnf install -y dnf-plugins-core \
-            || xmg_die "安装 dnf-plugins-core 失败"
-
-        dnf copr enable -y @caddy/caddy \
-            || xmg_die "启用 Caddy COPR 源失败"
-
-        dnf install -y caddy \
-            || xmg_die "dnf 安装 Caddy 失败"
-
+        xmg_caddy_install_by_dnf
     elif xmg_cmd_exists yum; then
-        xmg_info "检测到 yum，使用 CentOS/RHEL 7 安装路径"
-
-        yum install -y yum-plugin-copr \
-            || xmg_die "安装 yum-plugin-copr 失败"
-
-        yum copr enable -y @caddy/caddy \
-            || xmg_die "启用 Caddy COPR 源失败"
-
-        yum install -y caddy \
-            || xmg_die "yum 安装 Caddy 失败"
-
+        xmg_caddy_install_by_yum
     else
         xmg_die "未支持的系统：未检测到 apt-get / dnf / yum"
     fi
@@ -236,19 +236,20 @@ xmg_caddy_install_update() {
     if xmg_caddy_is_systemd_available; then
         systemctl daemon-reload >/dev/null 2>&1 || true
 
-        if ! systemctl enable "$XMG_CADDY_SERVICE" >/dev/null 2>&1; then
+        if systemctl enable "$XMG_CADDY_SERVICE" >/dev/null 2>&1; then
+            xmg_info "Caddy 已设置为开机自启"
+        else
             xmg_warn "Caddy 已安装，但设置开机自启失败"
         fi
 
-        # 服务启动失败常见原因是 Caddyfile、端口占用或权限问题。
-        # 这里不直接判定安装失败。
-        if ! systemctl start "$XMG_CADDY_SERVICE" >/dev/null 2>&1; then
+        if systemctl start "$XMG_CADDY_SERVICE" >/dev/null 2>&1; then
+            xmg_info "Caddy 服务已启动"
+        else
             xmg_warn "Caddy 已安装，但服务启动失败"
+            xmg_warn "常见原因：Caddyfile 配置错误、端口占用或权限问题"
             xmg_warn "请执行以下命令查看原因："
             xmg_warn "systemctl status ${XMG_CADDY_SERVICE} --no-pager"
             xmg_warn "journalctl -u ${XMG_CADDY_SERVICE} -n 100 --no-pager"
-        else
-            xmg_info "Caddy 服务已启动"
         fi
     else
         xmg_warn "未检测到 systemctl，仅完成 Caddy 安装"
@@ -282,23 +283,15 @@ xmg_caddy_uninstall() {
 
     if xmg_cmd_exists apt-get; then
         apt-get remove -y caddy || xmg_die "卸载 Caddy 失败"
-        xmg_info "Caddy 已卸载"
-        return 0
-    fi
-
-    if xmg_cmd_exists dnf; then
+    elif xmg_cmd_exists dnf; then
         dnf remove -y caddy || xmg_die "卸载 Caddy 失败"
-        xmg_info "Caddy 已卸载"
-        return 0
-    fi
-
-    if xmg_cmd_exists yum; then
+    elif xmg_cmd_exists yum; then
         yum remove -y caddy || xmg_die "卸载 Caddy 失败"
-        xmg_info "Caddy 已卸载"
-        return 0
+    else
+        xmg_die "未支持的系统：无法卸载 Caddy"
     fi
 
-    xmg_die "未支持的系统：无法卸载 Caddy"
+    xmg_info "Caddy 已卸载"
 }
 
 # ===== 服务生命周期 =====
@@ -344,15 +337,15 @@ xmg_caddy_validate_config() {
         return 1
     fi
 
-    if [ -f /etc/caddy/Caddyfile ]; then
-        caddy validate --config /etc/caddy/Caddyfile || return 1
-    else
+    if [ ! -f /etc/caddy/Caddyfile ]; then
         xmg_warn "未找到 /etc/caddy/Caddyfile"
         return 1
     fi
+
+    caddy validate --config /etc/caddy/Caddyfile || return 1
 }
 
-# ===== 诊断 =====
+# ===== 简化诊断 =====
 
 xmg_caddy_diag() {
     echo "========== Caddy 安装诊断 =========="
@@ -370,28 +363,8 @@ xmg_caddy_diag() {
     echo "uid=$(id -u), user=$(id -un 2>/dev/null || echo unknown)"
 
     echo
-    echo "[包管理器检测]"
-    if xmg_cmd_exists apt-get; then
-        echo "apt-get: $(command -v apt-get)"
-    else
-        echo "apt-get: 未检测到"
-    fi
-
-    if xmg_cmd_exists dnf; then
-        echo "dnf: $(command -v dnf)"
-    else
-        echo "dnf: 未检测到"
-    fi
-
-    if xmg_cmd_exists yum; then
-        echo "yum: $(command -v yum)"
-    else
-        echo "yum: 未检测到"
-    fi
-
-    echo
-    echo "[基础命令检测]"
-    for cmd in curl gpg systemctl caddy; do
+    echo "[命令检测]"
+    for cmd in apt-get dnf yum curl gpg systemctl caddy; do
         if xmg_cmd_exists "$cmd"; then
             echo "$cmd: $(command -v "$cmd")"
         else
@@ -426,37 +399,11 @@ xmg_caddy_diag() {
     fi
 
     echo
-    echo "[网络测试]"
-    if xmg_cmd_exists curl; then
-        if curl -fsSL -I "$XMG_CADDY_APT_KEY_URL" >/dev/null 2>&1; then
-            echo "Caddy GPG key URL 可访问"
-        else
-            echo "Caddy GPG key URL 不可访问"
-        fi
-
-        if curl -fsSL -I "$XMG_CADDY_APT_SOURCE_URL" >/dev/null 2>&1; then
-            echo "Caddy APT source URL 可访问"
-        else
-            echo "Caddy APT source URL 不可访问"
-        fi
-    else
-        echo "curl 未安装，跳过网络测试"
-    fi
-
-    echo
     echo "[systemd 服务状态]"
     if xmg_caddy_is_systemd_available; then
         systemctl status "$XMG_CADDY_SERVICE" --no-pager || true
     else
         echo "systemctl 不存在"
-    fi
-
-    echo
-    echo "[最近日志]"
-    if xmg_caddy_is_systemd_available; then
-        journalctl -u "$XMG_CADDY_SERVICE" -n 50 --no-pager 2>/dev/null || true
-    else
-        echo "systemctl 不存在，跳过 journalctl"
     fi
 }
 
